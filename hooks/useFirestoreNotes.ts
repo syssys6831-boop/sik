@@ -109,12 +109,16 @@ export const useFirestoreNotes = (userId: string | null) => {
       return;
     }
     
+    let unsubscribe: (() => void) | null = null;
+    
+    // 먼저 인덱스가 있는 쿼리 시도
     const q = query(
       getNotesCollectionRef(), 
       where('userId', '==', userId),
       orderBy('lastEdited', 'desc')
     );
-    return onSnapshot(
+    
+    unsubscribe = onSnapshot(
       q,
       (snapshot) => {
         setNotes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Note)));
@@ -122,11 +126,45 @@ export const useFirestoreNotes = (userId: string | null) => {
         setError(null);
       },
       (error) => {
-        handleFirestoreError(error, 'notes subscription');
-        setError('노트를 불러오는 중 오류가 발생했습니다.');
-        setIsLoading(false);
+        // 인덱스 에러인 경우 fallback 쿼리 사용
+        if (error.code === 'failed-precondition' || error.message.includes('index')) {
+          console.warn('인덱스가 없어 fallback 쿼리를 사용합니다. Firebase Console에서 인덱스를 생성해주세요.');
+          // 인덱스 없이 쿼리 (클라이언트에서 정렬)
+          const fallbackQ = query(
+            getNotesCollectionRef(),
+            where('userId', '==', userId)
+          );
+          unsubscribe = onSnapshot(
+            fallbackQ,
+            (snapshot) => {
+              const notesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Note));
+              // 클라이언트에서 정렬
+              notesData.sort((a, b) => {
+                const aTime = a.lastEdited?.toMillis() || a.createdAt?.toMillis() || 0;
+                const bTime = b.lastEdited?.toMillis() || b.createdAt?.toMillis() || 0;
+                return bTime - aTime;
+              });
+              setNotes(notesData);
+              setIsLoading(false);
+              setError(null);
+            },
+            (fallbackError) => {
+              handleFirestoreError(fallbackError, 'notes subscription (fallback)');
+              setError(`노트를 불러오는 중 오류가 발생했습니다: ${fallbackError.message}`);
+              setIsLoading(false);
+            }
+          );
+        } else {
+          handleFirestoreError(error, 'notes subscription');
+          setError(`노트를 불러오는 중 오류가 발생했습니다: ${error.message}`);
+          setIsLoading(false);
+        }
       }
     );
+    
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
   }, [userId]);
 
   // Files Subscription (user-specific)
@@ -136,20 +174,51 @@ export const useFirestoreNotes = (userId: string | null) => {
       return;
     }
     
+    let unsubscribe: (() => void) | null = null;
+    
     const q = query(
       getFilesCollectionRef(), 
       where('userId', '==', userId),
       orderBy('createdAt', 'desc')
     );
-    return onSnapshot(
+    
+    unsubscribe = onSnapshot(
       q,
       (snapshot) => {
         setFiles(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as StoredFile)));
       },
       (error) => {
-        handleFirestoreError(error, 'files subscription');
+        // 인덱스 에러인 경우 fallback 쿼리 사용
+        if (error.code === 'failed-precondition' || error.message.includes('index')) {
+          console.warn('인덱스가 없어 fallback 쿼리를 사용합니다.');
+          const fallbackQ = query(
+            getFilesCollectionRef(),
+            where('userId', '==', userId)
+          );
+          unsubscribe = onSnapshot(
+            fallbackQ,
+            (snapshot) => {
+              const filesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as StoredFile));
+              filesData.sort((a, b) => {
+                const aTime = a.createdAt?.toMillis() || 0;
+                const bTime = b.createdAt?.toMillis() || 0;
+                return bTime - aTime;
+              });
+              setFiles(filesData);
+            },
+            (fallbackError) => {
+              handleFirestoreError(fallbackError, 'files subscription (fallback)');
+            }
+          );
+        } else {
+          handleFirestoreError(error, 'files subscription');
+        }
       }
     );
+    
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
   }, [userId]);
 
   // TimeBox Subscription (user-specific)
@@ -183,56 +252,92 @@ export const useFirestoreNotes = (userId: string | null) => {
       return;
     }
     
+    let unsubscribe: (() => void) | null = null;
+    
+    const processTodos = async (snapshot: any) => {
+      try {
+        const allTodos = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as Todo));
+        const rolloverBatch = writeBatch(db);
+        let hasChanges = false;
+
+        allTodos.forEach(todo => {
+          if (todo.lastDate !== todayStr) {
+            if (todo.fixed) {
+              rolloverBatch.update(doc(db, 'todos', todo.id), { completed: false, lastDate: todayStr });
+              hasChanges = true;
+            } else if (!todo.completed) {
+              rolloverBatch.update(doc(db, 'todos', todo.id), { lastDate: todayStr });
+              hasChanges = true;
+            }
+          }
+        });
+
+        if (hasChanges) {
+          await rolloverBatch.commit();
+        } else {
+          // FILTER: Keep only today's or fixed todos
+          const currentTodos = allTodos.filter(t => t.lastDate === todayStr || t.fixed);
+          
+          // SORT: Completed items to the bottom, then by order
+          const sortedTodos = [...currentTodos].sort((a, b) => {
+            if (a.completed !== b.completed) {
+              return a.completed ? 1 : -1; // completed (true) goes to the end (1)
+            }
+            return (a.order || 0) - (b.order || 0);
+          });
+          
+          setTodos(sortedTodos);
+        }
+      } catch (error) {
+        handleFirestoreError(error as FirestoreError, 'todos processing');
+      }
+    };
+    
     // We query by order initially, but we will re-sort in the client to ensure completed items stay at the bottom
     const q = query(
       getTodosCollectionRef(), 
       where('userId', '==', userId),
       orderBy('order', 'asc')
     );
-    return onSnapshot(
+    
+    unsubscribe = onSnapshot(
       q,
-      async (snapshot) => {
-        try {
-          const allTodos = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Todo));
-          const rolloverBatch = writeBatch(db);
-          let hasChanges = false;
-
-          allTodos.forEach(todo => {
-            if (todo.lastDate !== todayStr) {
-              if (todo.fixed) {
-                rolloverBatch.update(doc(db, 'todos', todo.id), { completed: false, lastDate: todayStr });
-                hasChanges = true;
-              } else if (!todo.completed) {
-                rolloverBatch.update(doc(db, 'todos', todo.id), { lastDate: todayStr });
-                hasChanges = true;
-              }
-            }
-          });
-
-          if (hasChanges) {
-            await rolloverBatch.commit();
-          } else {
-            // FILTER: Keep only today's or fixed todos
-            const currentTodos = allTodos.filter(t => t.lastDate === todayStr || t.fixed);
-            
-            // SORT: Completed items to the bottom, then by order
-            const sortedTodos = [...currentTodos].sort((a, b) => {
-              if (a.completed !== b.completed) {
-                return a.completed ? 1 : -1; // completed (true) goes to the end (1)
-              }
-              return (a.order || 0) - (b.order || 0);
-            });
-            
-            setTodos(sortedTodos);
-          }
-        } catch (error) {
-          handleFirestoreError(error as FirestoreError, 'todos processing');
-        }
-      },
+      processTodos,
       (error) => {
-        handleFirestoreError(error, 'todos subscription');
+        // 인덱스 에러인 경우 fallback 쿼리 사용
+        if (error.code === 'failed-precondition' || error.message.includes('index')) {
+          console.warn('인덱스가 없어 fallback 쿼리를 사용합니다.');
+          const fallbackQ = query(
+            getTodosCollectionRef(),
+            where('userId', '==', userId)
+          );
+          unsubscribe = onSnapshot(
+            fallbackQ,
+            (snapshot) => {
+              const allTodos = snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() } as Todo));
+              // 클라이언트에서 필터링 및 정렬
+              const currentTodos = allTodos.filter(t => t.lastDate === todayStr || t.fixed);
+              const sortedTodos = [...currentTodos].sort((a, b) => {
+                if (a.completed !== b.completed) {
+                  return a.completed ? 1 : -1;
+                }
+                return (a.order || 0) - (b.order || 0);
+              });
+              setTodos(sortedTodos);
+            },
+            (fallbackError) => {
+              handleFirestoreError(fallbackError, 'todos subscription (fallback)');
+            }
+          );
+        } else {
+          handleFirestoreError(error, 'todos subscription');
+        }
       }
     );
+    
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
   }, [todayStr, userId]);
 
   const addTodo = useCallback(async (text: string) => {
