@@ -78,7 +78,7 @@ const TodoBox: React.FC<TodoBoxProps> = ({
   return (
     <div
       id="todobox-window"
-      className="fixed z-20 w-80 sm:w-[400px] glass-morphism rounded-[24px] shadow-2xl flex flex-col overflow-hidden select-none transition-all duration-300 hover:shadow-emerald-500/10"
+      className="fixed z-20 w-80 sm:w-[400px] glass-morphism rounded-[24px] shadow-2xl flex flex-col overflow-hidden select-none transition-shadow duration-300 hover:shadow-emerald-500/10"
       style={{ 
         left: `${position.x}px`, 
         top: `${position.y}px`,

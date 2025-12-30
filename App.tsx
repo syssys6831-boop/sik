@@ -1,8 +1,10 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useAuth } from './hooks/useAuth';
 import { useFirestoreNotes } from './hooks/useFirestoreNotes';
 import { useDrag } from './hooks/useDrag';
 import { setWindowFocus } from './utils/domUtils';
 import { formatDateString } from './utils/dateUtils';
+import LoginScreen from './components/LoginScreen';
 import NoteCard from './components/NoteCard';
 import PlusIcon from './components/icons/PlusIcon';
 import ListIcon from './components/icons/ListIcon';
@@ -13,6 +15,7 @@ import TimeBox from './components/TimeBox';
 import TodoBox from './components/TodoBox';
 
 const App: React.FC = () => {
+  const { user, loading: authLoading, logout } = useAuth();
   const { 
     notes, files, timeBox, todos, todayStr, todoBoxPos, todoBoxSize,
     isLoading, error,
@@ -25,6 +28,8 @@ const App: React.FC = () => {
   const [isNoteListOpen, setIsNoteListOpen] = useState(false);
   const [isTimeBoxOpen, setIsTimeBoxOpen] = useState(false);
   const [isTodoBoxOpen, setIsTodoBoxOpen] = useState(false);
+  const [isAddingNote, setIsAddingNote] = useState(false);
+  const previousNotesCountRef = useRef(0);
 
   // 드래그 훅 사용
   const { startDragging } = useDrag({
@@ -40,6 +45,57 @@ const App: React.FC = () => {
     bringToFront(id);
     setWindowFocus(id);
   }, [bringToFront]);
+
+  const handleAddNote = useCallback(async () => {
+    if (isAddingNote) return; // 중복 클릭 방지
+    
+    setIsAddingNote(true);
+    try {
+      await addNote();
+    } catch (err) {
+      console.error('노트 추가 실패:', err);
+      // 에러는 useFirestoreNotes의 error 상태로 처리됨
+    } finally {
+      setIsAddingNote(false);
+    }
+  }, [addNote, isAddingNote]);
+
+  // 새 노트가 생성되면 자동으로 맨 위로 올리기
+  useEffect(() => {
+    const activeNotes = notes.filter(n => n.status === 'active');
+    const currentCount = activeNotes.length;
+    
+    // 노트가 새로 추가되었을 때 (개수가 증가했을 때)
+    if (currentCount > previousNotesCountRef.current && currentCount > 0) {
+      // lastEdited 기준으로 정렬하여 가장 최신 노트 찾기
+      const sortedNotes = [...activeNotes].sort((a, b) => {
+        const aTime = a.lastEdited?.toMillis() || a.createdAt?.toMillis() || 0;
+        const bTime = b.lastEdited?.toMillis() || b.createdAt?.toMillis() || 0;
+        return bTime - aTime;
+      });
+      if (sortedNotes[0]) {
+        // 약간의 지연을 두어 DOM이 업데이트된 후 z-index 조정
+        setTimeout(() => {
+          setWindowFocus(sortedNotes[0].id);
+        }, 50);
+      }
+    }
+    
+    previousNotesCountRef.current = currentCount;
+  }, [notes]);
+
+  // 로그인하지 않은 경우 로그인 화면 표시
+  if (authLoading) {
+    return (
+      <div className="h-screen w-full flex items-center justify-center bg-[#0f172a]">
+        <div className="text-white text-lg">로딩 중...</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginScreen />;
+  }
 
   return (
     <main className="h-screen w-full overflow-hidden bg-[#0f172a] relative">
@@ -94,15 +150,54 @@ const App: React.FC = () => {
       </div>
 
       {/* Note Cards */}
-      {notes.filter(n => n.status === 'active').map((note) => (
+      {notes
+        .filter(n => n.status === 'active')
+        .sort((a, b) => {
+          // lastEdited 기준으로 내림차순 정렬 (최신 것이 나중에 렌더링되어 z-index가 높아짐)
+          const aTime = a.lastEdited?.toMillis() || a.createdAt?.toMillis() || 0;
+          const bTime = b.lastEdited?.toMillis() || b.createdAt?.toMillis() || 0;
+          return bTime - aTime;
+        })
+        .map((note) => (
           <NoteCard
             key={note.id} note={note} onContentChange={updateNoteContent} onMinimize={(id) => updateNoteStatus(id, 'minimized')} onStatusChange={updateNoteStatus}
-            onMouseDown={(id, e) => startDragging(e, 'note', id)} onTouchStart={() => {}} 
-            onResizeStart={(id, e) => startDragging(e as any, 'resize', id)} 
+            onMouseDown={(id, e) => {
+              bringToFront(id);
+              setWindowFocus(id);
+              startDragging(e, 'note', id);
+            }} 
+            onTouchStart={() => {}} 
+            onResizeStart={(id, e) => {
+              bringToFront(id);
+              setWindowFocus(id);
+              startDragging(e as any, 'resize', id);
+            }} 
             onColorChange={updateNoteColor}
           />
       ))}
       
+      {/* User Info & Logout */}
+      <div className="fixed top-4 right-4 z-[100] flex items-center gap-3">
+        <div className="bg-slate-800/90 backdrop-blur-sm rounded-lg px-4 py-2 flex items-center gap-3 border border-slate-700/50">
+          {user.photoURL && (
+            <img 
+              src={user.photoURL} 
+              alt={user.displayName || 'User'} 
+              className="w-8 h-8 rounded-full"
+            />
+          )}
+          <span className="text-white text-sm font-medium">
+            {user.displayName || user.email}
+          </span>
+          <button
+            onClick={logout}
+            className="text-slate-400 hover:text-white text-sm px-3 py-1 rounded hover:bg-slate-700 transition-colors"
+          >
+            로그아웃
+          </button>
+        </div>
+      </div>
+
       {/* Floating Action Menu */}
       <div className="fixed bottom-10 right-10 flex flex-col items-center gap-5 z-[100]">
         <div className="flex flex-col gap-3 group">
@@ -128,10 +223,15 @@ const App: React.FC = () => {
           </button>
 
           <button 
-            onClick={addNote} 
-            className="w-16 h-16 bg-blue-600 text-white rounded-2xl shadow-2xl hover:bg-blue-500 transition-all flex items-center justify-center hover:scale-110 active:scale-95 group ring-8 ring-blue-600/10"
+            onClick={handleAddNote}
+            disabled={isAddingNote}
+            className={`w-16 h-16 bg-blue-600 text-white rounded-2xl shadow-2xl hover:bg-blue-500 transition-all flex items-center justify-center hover:scale-110 active:scale-95 group ring-8 ring-blue-600/10 ${isAddingNote ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
-            <PlusIcon className="w-10 h-10 group-hover:rotate-90 transition-transform duration-500" />
+            {isAddingNote ? (
+              <div className="w-10 h-10 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+            ) : (
+              <PlusIcon className="w-10 h-10 group-hover:rotate-90 transition-transform duration-500" />
+            )}
           </button>
         </div>
       </div>

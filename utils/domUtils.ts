@@ -7,6 +7,17 @@
  */
 export const setWindowFocus = (targetId: string): void => {
   const windows = document.querySelectorAll('[data-note-id], #timebox-window, #todobox-window');
+  
+  // 현재 가장 높은 z-index 찾기
+  let maxZIndex = 10;
+  windows.forEach(win => {
+    const zIndex = parseInt((win as HTMLElement).style.zIndex || '10', 10);
+    if (zIndex > maxZIndex) {
+      maxZIndex = zIndex;
+    }
+  });
+  
+  // 모든 창의 z-index를 기본값으로 리셋
   windows.forEach(win => {
     (win as HTMLElement).style.zIndex = '10';
   });
@@ -20,8 +31,9 @@ export const setWindowFocus = (targetId: string): void => {
     target = document.querySelector(`[data-note-id="${targetId}"]`);
   }
   
+  // 타겟 창을 가장 높은 z-index보다 1 높게 설정
   if (target) {
-    target.style.zIndex = '50';
+    target.style.zIndex = String(Math.max(maxZIndex + 1, 50));
   }
 };
 
