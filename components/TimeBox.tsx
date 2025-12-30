@@ -98,15 +98,27 @@ const TimeBox: React.FC<TimeBoxProps> = ({
     >
       {/* Header */}
       <div 
-        className="flex justify-between items-center p-5 border-b bg-slate-50 cursor-grab active:cursor-grabbing"
-        onMouseDown={onMouseDown}
-        onTouchStart={onTouchStart}
+        className="flex justify-between items-center p-5 border-b bg-slate-50"
       >
-        <div>
+        <div 
+          className="flex-grow cursor-grab active:cursor-grabbing"
+          onMouseDown={onMouseDown}
+          onTouchStart={onTouchStart}
+        >
           <h2 className="text-2xl font-black tracking-tighter uppercase italic text-slate-800 leading-none">Daily Planner</h2>
           <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mt-1.5">{currentDate}</p>
         </div>
-        <button onClick={onClose} className="p-2 rounded-full hover:bg-slate-200 text-slate-400 transition-colors">
+        <button 
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+          }}
+          className="p-2 rounded-full hover:bg-slate-200 text-slate-400 transition-colors flex-shrink-0"
+        >
           <XIcon className="w-6 h-6" />
         </button>
       </div>
