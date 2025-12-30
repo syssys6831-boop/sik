@@ -32,9 +32,6 @@ const TimeBox: React.FC<TimeBoxProps> = ({
   // hours array adjusted to remove 24 (length 17 = 7 to 23)
   const hours = useMemo(() => Array.from({ length: 17 }, (_, i) => i + 7), []);
 
-  // 에러 방지를 위한 안전한 데이터 처리
-  if (!isOpen) return null;
-
   const getSlotValue = (key: string) => {
     const [h, s] = key.split('-').map(Number);
     return h * 2 + s;
@@ -252,9 +249,14 @@ const TimeBoxRow: React.FC<{
 const OptimizedInput: React.FC<{ initialValue: string, onUpdate: (val: string) => void }> = ({ initialValue, onUpdate }) => {
   const [val, setVal] = useState(initialValue);
   const isInternalChange = useRef(false);
+  const prevInitialValue = useRef(initialValue);
 
   useEffect(() => {
-    if (!isInternalChange.current) setVal(initialValue);
+    // initialValue가 실제로 변경되었을 때만 업데이트
+    if (prevInitialValue.current !== initialValue && !isInternalChange.current) {
+      setVal(initialValue);
+      prevInitialValue.current = initialValue;
+    }
     isInternalChange.current = false;
   }, [initialValue]);
 
