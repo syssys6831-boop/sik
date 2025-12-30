@@ -1,0 +1,5 @@
+{
+  "name": "Web Sticky Notes",
+  "description": "A web-based sticky notes application that syncs in real-time across devices using Google Firestore. Notes are stored securely in the cloud.",
+  "requestFramePermissions": []
+}
