@@ -23,7 +23,7 @@ const App: React.FC = () => {
     addFile, deleteFile,
     updateTimeBoxEntry, updateTimeBoxPosition, updateTimeBoxColors,
     addTodo, toggleTodo, toggleFixedTodo, deleteTodo, updateTodoPosition, updateTodoBoxSize, updateTodoOrder
-  } = useFirestoreNotes();
+  } = useFirestoreNotes(user?.uid || null);
 
   const [isNoteListOpen, setIsNoteListOpen] = useState(false);
   const [isTimeBoxOpen, setIsTimeBoxOpen] = useState(false);

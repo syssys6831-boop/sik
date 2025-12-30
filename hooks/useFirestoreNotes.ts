@@ -11,6 +11,7 @@ import {
   setDoc,
   query,
   orderBy,
+  where,
   serverTimestamp,
   getDoc,
   writeBatch,
@@ -36,9 +37,10 @@ export const HIGHLIGHTER_COLORS = [
   { name: 'Green', class: 'bg-emerald-100/80' },
 ];
 
-const notesCollectionRef = collection(db, 'notes');
-const filesCollectionRef = collection(db, 'files');
-const todosCollectionRef = collection(db, 'todos');
+// Collection references (will be filtered by userId in queries)
+const getNotesCollectionRef = () => collection(db, 'notes');
+const getFilesCollectionRef = () => collection(db, 'files');
+const getTodosCollectionRef = () => collection(db, 'todos');
 
 /**
  * Firebase 에러를 사용자 친화적인 메시지로 변환
@@ -59,7 +61,7 @@ const handleFirestoreError = (error: FirestoreError, operation: string): void =>
   }
 };
 
-export const useFirestoreNotes = () => {
+export const useFirestoreNotes = (userId: string | null) => {
   const [notes, setNotes] = useState<Note[]>([]);
   const [files, setFiles] = useState<StoredFile[]>([]);
   const [timeBox, setTimeBox] = useState<TimeBoxData | null>(null);
@@ -81,9 +83,15 @@ export const useFirestoreNotes = () => {
     return () => clearInterval(timer);
   }, [todayStr]);
 
-  // Unified Subscription for Settings
+  // Unified Subscription for Settings (user-specific)
   useEffect(() => {
-    const unsubscribe = onSnapshot(doc(db, 'settings', 'todoBox'), (docSnap) => {
+    if (!userId) {
+      setIsLoading(false);
+      return;
+    }
+    
+    const settingsDocRef = doc(db, 'settings', `todoBox_${userId}`);
+    const unsubscribe = onSnapshot(settingsDocRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         if (data.position) setTodoBoxPos(data.position);
@@ -91,11 +99,21 @@ export const useFirestoreNotes = () => {
       }
     });
     return () => unsubscribe();
-  }, []);
+  }, [userId]);
 
-  // Notes Subscription
+  // Notes Subscription (user-specific)
   useEffect(() => {
-    const q = query(notesCollectionRef, orderBy('lastEdited', 'desc'));
+    if (!userId) {
+      setNotes([]);
+      setIsLoading(false);
+      return;
+    }
+    
+    const q = query(
+      getNotesCollectionRef(), 
+      where('userId', '==', userId),
+      orderBy('lastEdited', 'desc')
+    );
     return onSnapshot(
       q,
       (snapshot) => {
@@ -109,11 +127,20 @@ export const useFirestoreNotes = () => {
         setIsLoading(false);
       }
     );
-  }, []);
+  }, [userId]);
 
-  // Files Subscription
+  // Files Subscription (user-specific)
   useEffect(() => {
-    const q = query(filesCollectionRef, orderBy('createdAt', 'desc'));
+    if (!userId) {
+      setFiles([]);
+      return;
+    }
+    
+    const q = query(
+      getFilesCollectionRef(), 
+      where('userId', '==', userId),
+      orderBy('createdAt', 'desc')
+    );
     return onSnapshot(
       q,
       (snapshot) => {
@@ -123,11 +150,16 @@ export const useFirestoreNotes = () => {
         handleFirestoreError(error, 'files subscription');
       }
     );
-  }, []);
+  }, [userId]);
 
-  // TimeBox Subscription
+  // TimeBox Subscription (user-specific)
   useEffect(() => {
-    const docRef = doc(db, 'timeboxes', todayStr);
+    if (!userId) {
+      setTimeBox(null);
+      return;
+    }
+    
+    const docRef = doc(db, 'timeboxes', `${userId}_${todayStr}`);
     return onSnapshot(
       docRef,
       (docSnap) => {
@@ -135,19 +167,28 @@ export const useFirestoreNotes = () => {
           const data = docSnap.data();
           setTimeBox({ id: docSnap.id, ...data } as TimeBoxData);
         } else {
-          setTimeBox({ id: todayStr, entries: {}, colors: {}, position: { x: window.innerWidth - 600, y: 100 } });
+          setTimeBox({ id: `${userId}_${todayStr}`, entries: {}, colors: {}, position: { x: window.innerWidth - 600, y: 100 } });
         }
       },
       (error) => {
         handleFirestoreError(error, 'timebox subscription');
       }
     );
-  }, [todayStr]);
+  }, [todayStr, userId]);
 
-  // Todo List Subscription with Optimized Rollover and Completion-aware Sorting
+  // Todo List Subscription with Optimized Rollover and Completion-aware Sorting (user-specific)
   useEffect(() => {
+    if (!userId) {
+      setTodos([]);
+      return;
+    }
+    
     // We query by order initially, but we will re-sort in the client to ensure completed items stay at the bottom
-    const q = query(todosCollectionRef, orderBy('order', 'asc'));
+    const q = query(
+      getTodosCollectionRef(), 
+      where('userId', '==', userId),
+      orderBy('order', 'asc')
+    );
     return onSnapshot(
       q,
       async (snapshot) => {
@@ -192,27 +233,28 @@ export const useFirestoreNotes = () => {
         handleFirestoreError(error, 'todos subscription');
       }
     );
-  }, [todayStr]);
+  }, [todayStr, userId]);
 
   const addTodo = useCallback(async (text: string) => {
-    if (!text.trim()) return;
+    if (!text.trim() || !userId) return;
     try {
       // Get max order among uncompleted todos to put the new item at the end of the "active" section
       const activeTodos = todos.filter(t => !t.completed);
       const maxOrder = activeTodos.length > 0 ? Math.max(...activeTodos.map(t => t.order || 0)) : 0;
       
-      await addDoc(todosCollectionRef, {
+      await addDoc(getTodosCollectionRef(), {
         text,
         completed: false,
         fixed: false,
         lastDate: todayStr,
+        userId,
         createdAt: serverTimestamp(),
         order: maxOrder + 1
       });
     } catch (error) {
       handleFirestoreError(error as FirestoreError, 'add todo');
     }
-  }, [todayStr, todos]);
+  }, [todayStr, todos, userId]);
 
   const toggleTodo = useCallback(async (id: string, completed: boolean) => {
     try {
@@ -239,20 +281,22 @@ export const useFirestoreNotes = () => {
   }, []);
 
   const updateTodoPosition = useCallback(async (pos: { x: number, y: number }) => {
+    if (!userId) return;
     try {
-      await setDoc(doc(db, 'settings', 'todoBox'), { position: pos }, { merge: true });
+      await setDoc(doc(db, 'settings', `todoBox_${userId}`), { position: pos }, { merge: true });
     } catch (error) {
       handleFirestoreError(error as FirestoreError, 'update todo position');
     }
-  }, []);
+  }, [userId]);
 
   const updateTodoBoxSize = useCallback(async (size: { height: number }) => {
+    if (!userId) return;
     try {
-      await setDoc(doc(db, 'settings', 'todoBox'), { size }, { merge: true });
+      await setDoc(doc(db, 'settings', `todoBox_${userId}`), { size }, { merge: true });
     } catch (error) {
       handleFirestoreError(error as FirestoreError, 'update todo box size');
     }
-  }, []);
+  }, [userId]);
 
   const updateTodoOrder = useCallback(async (reorderedTodos: Todo[]) => {
     const batch = writeBatch(db);
@@ -265,8 +309,9 @@ export const useFirestoreNotes = () => {
   }, []);
 
   const updateTimeBoxEntry = useCallback(async (hour: number, slot: 1 | 2, text: string) => {
+    if (!userId) return;
     try {
-      const docRef = doc(db, 'timeboxes', todayStr);
+      const docRef = doc(db, 'timeboxes', `${userId}_${todayStr}`);
       const hourKey = hour.toString();
       const snap = await getDoc(docRef);
       const data = (snap.exists() ? snap.data() : { entries: {} }) as any;
@@ -276,27 +321,30 @@ export const useFirestoreNotes = () => {
     } catch (error) {
       handleFirestoreError(error as FirestoreError, 'update timebox entry');
     }
-  }, [todayStr]);
+  }, [todayStr, userId]);
 
   const updateTimeBoxPosition = useCallback(async (pos: { x: number, y: number }) => {
+    if (!userId) return;
     try {
-      await setDoc(doc(db, 'timeboxes', todayStr), { position: pos }, { merge: true });
+      await setDoc(doc(db, 'timeboxes', `${userId}_${todayStr}`), { position: pos }, { merge: true });
     } catch (error) {
       handleFirestoreError(error as FirestoreError, 'update timebox position');
     }
-  }, [todayStr]);
+  }, [todayStr, userId]);
 
   const updateTimeBoxColors = useCallback(async (colors: Record<string, string>) => {
+    if (!userId) return;
     try {
-      await setDoc(doc(db, 'timeboxes', todayStr), { colors }, { merge: true });
+      await setDoc(doc(db, 'timeboxes', `${userId}_${todayStr}`), { colors }, { merge: true });
     } catch (error) {
       handleFirestoreError(error as FirestoreError, 'update timebox colors');
     }
-  }, [todayStr]);
+  }, [todayStr, userId]);
 
   const addNote = useCallback(async () => {
+    if (!userId) return;
     try {
-      await addDoc(notesCollectionRef, {
+      await addDoc(getNotesCollectionRef(), {
         content: '',
         color: NOTE_COLORS[Math.floor(Math.random() * NOTE_COLORS.length)],
         position: {
@@ -305,6 +353,7 @@ export const useFirestoreNotes = () => {
         },
         size: DEFAULT_NOTE_SIZE,
         status: 'active',
+        userId,
         createdAt: serverTimestamp(),
         lastEdited: serverTimestamp(),
       });
@@ -312,7 +361,7 @@ export const useFirestoreNotes = () => {
       handleFirestoreError(error as FirestoreError, 'add note');
       throw error;
     }
-  }, []);
+  }, [userId]);
 
   const updateNoteContent = useCallback(async (id: string, content: string) => {
     try {
@@ -371,15 +420,17 @@ export const useFirestoreNotes = () => {
   }, []);
 
   const addFile = useCallback((file: File) => {
+    if (!userId) return;
     const reader = new FileReader();
     reader.onload = async (e) => {
       if (e.target?.result) {
         try {
-          await addDoc(filesCollectionRef, {
+          await addDoc(getFilesCollectionRef(), {
             name: file.name,
             type: file.type,
             dataUrl: e.target.result,
             size: file.size,
+            userId,
             createdAt: serverTimestamp()
           });
         } catch (error) {
@@ -391,7 +442,7 @@ export const useFirestoreNotes = () => {
       console.error('파일 읽기 오류가 발생했습니다.');
     };
     reader.readAsDataURL(file);
-  }, []);
+  }, [userId]);
 
   const deleteFile = useCallback(async (id: string) => {
     try {
