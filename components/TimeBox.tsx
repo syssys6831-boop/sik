@@ -32,6 +32,9 @@ const TimeBox: React.FC<TimeBoxProps> = ({
   // hours array adjusted to remove 24 (length 17 = 7 to 23)
   const hours = useMemo(() => Array.from({ length: 17 }, (_, i) => i + 7), []);
 
+  // 에러 방지를 위한 안전한 데이터 처리
+  if (!isOpen) return null;
+
   const getSlotValue = (key: string) => {
     const [h, s] = key.split('-').map(Number);
     return h * 2 + s;
@@ -79,15 +82,25 @@ const TimeBox: React.FC<TimeBoxProps> = ({
   if (!isOpen) return null;
 
   const position = data?.position || { x: 100, y: 100 };
+  const safeData: TimeBoxData = data || { 
+    id: '', 
+    entries: {}, 
+    colors: {}, 
+    position: { x: 100, y: 100 } 
+  };
 
   const applyColor = (colorClass: string) => {
     if (selectedSlots.length === 0) return;
-    const newColors = { ...(data?.colors || {}) };
-    selectedSlots.forEach(key => {
-      newColors[key] = colorClass;
-    });
-    onUpdateColors(newColors);
-    setSelectedSlots([]);
+    try {
+      const newColors = { ...(safeData.colors || {}) };
+      selectedSlots.forEach(key => {
+        newColors[key] = colorClass;
+      });
+      onUpdateColors(newColors);
+      setSelectedSlots([]);
+    } catch (error) {
+      console.error('Error applying color:', error);
+    }
   };
 
   return (
@@ -164,7 +177,7 @@ const TimeBox: React.FC<TimeBoxProps> = ({
               <TimeBoxRow 
                 key={hour}
                 hour={hour}
-                data={data}
+                data={safeData}
                 handleSlotMouseDown={handleSlotMouseDown}
                 handleSlotMouseEnter={handleSlotMouseEnter}
                 selectedSlots={selectedSlots}
@@ -193,6 +206,11 @@ const TimeBoxRow: React.FC<{
   selectedSlots: string[];
   onUpdateEntry: (h: number, s: 1 | 2, t: string) => void;
 }> = ({ hour, data, handleSlotMouseDown, handleSlotMouseEnter, selectedSlots, onUpdateEntry }) => {
+  // 안전한 데이터 처리
+  const safeData = data || { id: '', entries: {}, colors: {}, position: { x: 100, y: 100 } };
+  const safeEntries = safeData.entries || {};
+  const safeColors = safeData.colors || {};
+
   return (
     <div className="flex border-b border-slate-100 last:border-b-0 min-h-[64px]">
       <div className="w-24 flex-shrink-0 flex items-center justify-center font-black text-black border-r border-slate-200 bg-slate-50/50 text-lg select-none">
@@ -203,8 +221,10 @@ const TimeBoxRow: React.FC<{
           const slot = s as 1 | 2;
           const key = `${hour}-${slot}`;
           const isSelected = selectedSlots.includes(key);
-          const bgColor = data?.colors[key] || 'bg-transparent';
-          const val = data?.entries[hour.toString()]?.[`slot${slot}` as 'slot1' | 'slot2'] || '';
+          const bgColor = safeColors[key] || 'bg-transparent';
+          const hourKey = hour.toString();
+          const hourEntry = safeEntries[hourKey] || { slot1: '', slot2: '' };
+          const val = hourEntry[`slot${slot}` as 'slot1' | 'slot2'] || '';
 
           return (
             <div 
